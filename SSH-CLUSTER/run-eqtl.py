@@ -1,6 +1,7 @@
 import boto3
 from botocore.exceptions import ClientError
 from paramiko import client as pclient
+from paramiko import ssh_exception
 import configparser
 import pickle
 import sys
@@ -15,13 +16,19 @@ def read_config(fn):
 
   cluster = { }
 
+  # required keys
   isok = True
-  for key in ('name', 'vpc', 'nnode', 'key', 'ami', 'type'):
+  for key in ('name', 'vpc', 'nnode', 'key', 'ami', 'type'):   
     if key not in config['clusterdef']:
       print('key %s required' % (key))
       isok = False
     else:
       cluster[key] = config['clusterdef'][key]
+
+  for key in ('sgn', 'efs'):     # optional keys
+    if key in config['clusterdef']:
+      cluster[key] = config['clusterdef'][key]
+  
   if not isok:
     sys.exit(1)
   cluster['nnode'] = int(cluster['nnode'])
@@ -30,7 +37,25 @@ def read_config(fn):
 
 
 def create_cluster(cluster):
-  (sgid,sgn) = create_security_group(cluster)
+
+  """ If a security group name is given in the config file, 
+      confirm it exists and use it. If no security group name
+      is in the config file, create a temporary security group,
+      which will be deleted with the cluster. Then launch instances. """
+
+  if 'sgn' in cluster:
+    sgn = cluster['sgn']
+    try:
+      res = boto3.client('ec2').describe_security_groups(GroupNames=[sgn])
+    except:
+      print("error: security group %s does not exist" % (sgn))
+      sys.exit(1)
+    sgid = res['SecurityGroups'][0]['GroupId']
+    cluster['delete-sg'] = False
+  else:
+    (sgid,sgn) = create_security_group(cluster)
+    cluster['delete-sg'] = True
+
   cluster['sgid'] = sgid
   cluster['sgname'] = sgn
   ids = create_instances(cluster)
@@ -139,16 +164,15 @@ def write_batchtools_config(compute):
   file.write('cluster.functions = makeClusterFunctionsSSH(workers)\n')
   file.close()
 
-def exssh(cl,cmd):
+def exssh(cl,cmd,ignore=[]):
   print(cmd)
   (stdin, stdout, stderr) = cl.exec_command(cmd)
   try:
     ex = stdout.channel.recv_exit_status()
-    if ex != 0:
+    if ex != 0 and ex not in ignore:
       print('  !!! Warning: ssh returned non-zero exit status %d ' % (ex))
   except SSHException:
     print('SSHException %s' % (cmd))
-    # sys.exit(1)
 
 def setup_passwordless_ssh(cluster):
 
@@ -186,11 +210,11 @@ def setup_passwordless_ssh(cluster):
 
 def setup_efs(cluster):
 
+  # TODO: check that cluster['sgn'] allows traffic on port 2049 from cluster['efs'] security group
+  # and cluster['efs'] security group allows traffic on port 22 from anywhere
 
-  # !!! add to config file !!!
-  efs_mnt = 'fs-58210511.efs.us-east-1.amazonaws.com:/' 
   mntcmd = ('sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2 ' + 
-    efs_mnt + ' /efs')
+    cluster['efs'] + ':/ /efs')
 
   headclient = pclient.SSHClient()
   headclient.set_missing_host_key_policy(pclient.AutoAddPolicy())
@@ -198,14 +222,16 @@ def setup_efs(cluster):
   hip = cluster['head']['public']
   kfn = cluster['key'] + '.pem'
   headclient.connect(hip, username='ubuntu', key_filename=kfn)
+  headfclient = headclient.open_sftp()
 
   exssh(headclient, 'sudo mkdir -p /efs')
-  exssh(headclient, mntcmd)
-  headclient.close()
+  exssh(headclient, mntcmd, ignore=[32])
 
   # Push batchtools.conf.R to /efs
   write_batchtools_config(cluster['compute'])
-  headfclient.put('batchtools.conf.R', '/efs/batchtools.conf.R')
+  headfclient.put('batchtools.conf.R', '/efs/btrun/batchtools.conf.R')
+
+  headclient.close()
 
   for c in cluster['compute']:
     cip = c['public']
@@ -217,7 +243,6 @@ def setup_efs(cluster):
     nodeclient.close()
     
 def setup_nfs(cluster):
-
 
   write_exports(cluster['compute'])
   write_fstab(cluster['head'])
@@ -301,9 +326,9 @@ if __name__ == '__main__':
   elif ( sys.argv[2] == str(2) ):
     cluster = load_cluster('cluster.obj')
     setup_passwordless_ssh(cluster)
-    setup_nfs(cluster)
+    if 'efs' in cluster:
+      setup_efs(cluster)
+    else:
+      setup_nfs(cluster)
     print_ip_addresses(cluster)
-
-
-
 
