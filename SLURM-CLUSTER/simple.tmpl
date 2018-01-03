@@ -1,0 +1,17 @@
+#!/bin/bash
+
+<%
+# relative paths are not handled well by Slurm
+log.file = normalizePath(log.file, winslash = "/", mustWork = FALSE)
+-%>
+
+#SBATCH --job-name=<%= job.name %>
+#SBATCH --output=<%= log.file %>
+#SBATCH --error=<%= log.file %>
+#SBATCH -p compute
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -t 1:00     
+
+Rscript -e 'batchtools::doJobCollection("<%= uri %>")'
+

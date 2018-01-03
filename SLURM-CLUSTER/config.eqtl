@@ -1,0 +1,29 @@
+[aws]
+aws_access_key_id = # ACCESS KEY
+aws_secret_access_key = # SECRET ACCESS KEY
+aws_region_name = us-east-1
+
+[cluster bioc]
+vpc_settings = public
+key_name = # KEY NAME (without .pem)
+base_os = ubuntu1604
+custom_ami = ami-1d8dda67
+s3_read_resource = arn:aws:s3:::eqtl-example-bucket/*   
+post_install = s3://eqtl-example-bucket/postinstall.sh
+initial_queue_size = 2
+max_queue_size = 2
+maintain_initial_size = false
+master_instance_type = t2.small
+compute_instance_type = t2.small
+scheduler = slurm
+
+[vpc public]
+vpc_id = vpc-576d222f
+master_subnet_id = subnet-66c6be02
+vpc_security_group_id = sg-79b6b80c
+
+[global]
+sanity_check = true
+update_check = true
+cluster_template = bioc
+
